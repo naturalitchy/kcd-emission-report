@@ -170,15 +170,30 @@ def calculate_variables(request_data: ReportRequest) -> Dict[str, Any]:
         scope3_emission_report_year = safe_float_convert(scope3_row.iloc[0]['보고대상연도 배출량(tCO2eq)']) if not scope3_row.empty else 0
         
         # Scope별 비율 계산
-        scope1_emission_rate_report_year = round(
-            (scope1_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
-        )
-        scope2_emission_rate_report_year = round(
-            (scope2_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
-        )
-        scope3_emission_rate_report_year = round(
-            (scope3_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
-        )
+        if total_emission_report_year != 0 and scope1_emission_report_year != 0:
+            scope1_emission_rate_report_year = round((scope1_emission_report_year / total_emission_report_year * 100), 2)
+        else:
+            scope1_emission_rate_report_year = 0.0
+
+        if total_emission_report_year != 0 and scope2_emission_report_year != 0:
+            scope2_emission_rate_report_year = round((scope2_emission_report_year / total_emission_report_year * 100), 2)
+        else:
+            scope2_emission_rate_report_year = 0.0
+
+        if total_emission_report_year != 0 and scope3_emission_report_year != 0:
+            scope3_emission_rate_report_year = round((scope3_emission_report_year / total_emission_report_year * 100), 2)
+        else:
+            scope3_emission_rate_report_year = 0.0
+
+        # scope1_emission_rate_report_year = round(
+        #     (scope1_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
+        # )
+        # scope2_emission_rate_report_year = round(
+        #     (scope2_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
+        # )
+        # scope3_emission_rate_report_year = round(
+        #     (scope3_emission_report_year / total_emission_report_year * 100) if total_emission_report_year != 0 else 0, 2
+        # )
         
         # 최다 배출원 찾기 (Scope 1, 2에서)
         scope1_2_data = table1_df[
