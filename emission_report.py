@@ -20,6 +20,10 @@ import tempfile
 import shutil
 import uuid
 
+from matplotlib import rc
+import urllib.request
+import zipfile
+
 app = FastAPI(title="온실가스 배출량 보고서 생성 API")
 
 # CORS 설정
@@ -345,9 +349,61 @@ def add_table_from_dataframe(document, df: pd.DataFrame):
     
     document.add_paragraph()  # 테이블 후 빈 줄 추가
 
-def create_emission_chart(chart1_csv: str, temp_dir: str):
-    """Chart1 CSV 데이터를 이용하여 누적 세로 막대형 차트를 생성합니다."""
+def setup_korean_font():
+    """서버 환경에서 한글 폰트를 설정합니다."""
     try:
+        # 설치된 한글 폰트 찾기
+        font_candidates = [
+            'NanumGothic', 'Nanum Gothic', 'NanumGothic-Regular',
+            'Noto Sans CJK KR', 'Noto Sans CJK', 'NotoSansCJK',
+            'Malgun Gothic', 'AppleGothic', 'Dotum', 'Gulim'
+        ]
+        
+        available_fonts = [f.name for f in fm.fontManager.ttflist]
+        print(f"사용 가능한 폰트 수: {len(available_fonts)}")
+        
+        korean_font = None
+        for font in font_candidates:
+            if font in available_fonts:
+                korean_font = font
+                break
+        
+        if korean_font:
+            plt.rcParams['font.family'] = korean_font
+            print(f"사용된 한글 폰트: {korean_font}")
+            return True
+        
+        # 폰트 캐시 새로고침 후 재시도
+        fm._rebuild()
+        available_fonts = [f.name for f in fm.fontManager.ttflist]
+        
+        for font in font_candidates:
+            if font in available_fonts:
+                korean_font = font
+                plt.rcParams['font.family'] = korean_font
+                print(f"캐시 새로고침 후 사용된 폰트: {korean_font}")
+                return True
+        
+        print("한글 폰트를 찾을 수 없습니다.")
+        return False
+        
+    except Exception as e:
+        print(f"폰트 설정 중 오류: {e}")
+        return False
+
+def create_emission_chart_robust(chart1_csv: str, temp_dir: str):
+    """견고한 차트 생성 함수 - 한글/영어 자동 선택"""
+    try:
+        # 한글 폰트 설정 시도
+        korean_font_available = setup_korean_font()
+        
+        if not korean_font_available:
+            print("한글 폰트 없음, 영어 차트로 생성합니다.")
+            plt.rcParams['font.family'] = 'DejaVu Sans'
+        
+        # minus 폰트 문제 해결
+        plt.rcParams['axes.unicode_minus'] = False
+        
         # Chart1 CSV 데이터 파싱
         df = csv_string_to_dataframe(chart1_csv)
         
@@ -355,61 +411,68 @@ def create_emission_chart(chart1_csv: str, temp_dir: str):
             print("차트 데이터가 비어있습니다.")
             return None
         
-        # 데이터 준비 - 각 Scope별로 연도별 배출량
-        scopes = df.iloc[:, 0].tolist()  # Scope 1, Scope 2, Scope 3
+        # 데이터 준비
+        scopes = df.iloc[:, 0].tolist()
         base_year_data = [safe_float_convert(x) for x in df.iloc[:, 1].tolist()]
         previous_year_data = [safe_float_convert(x) for x in df.iloc[:, 2].tolist()]
         report_year_data = [safe_float_convert(x) for x in df.iloc[:, 3].tolist()]
         
-        # 한글 폰트 설정
-        font_list = fm.findSystemFonts(fontpaths=None, fontext='ttf')
-        korean_fonts = []
-        for font in font_list:
-            try:
-                if any(korean_char in font for korean_char in ['AppleGothic', 'Nanum', 'Malgun', 'Dotum', 'Batang']):
-                    korean_fonts.append(font)
-            except:
-                continue
-        
-        if korean_fonts:
-            plt.rcParams['font.family'] = 'AppleGothic'
+        # 한글/영어 레이블 선택
+        if korean_font_available:
+            title = '연도별 Scope 온실가스 배출량 추이'
+            xlabel = '연도'
+            ylabel = '배출량 (tCO2eq)'
+            year_labels = ['기준연도', '전년도', '보고대상연도']
         else:
-            plt.rcParams['font.family'] = 'DejaVu Sans'
+            title = 'Annual Scope GHG Emissions Trend'
+            xlabel = 'Year'
+            ylabel = 'Emissions (tCO2eq)'
+            year_labels = ['Base Year', 'Previous Year', 'Report Year']
         
         # 차트 생성
         fig, ax = plt.subplots(figsize=(10, 7))
         
-        # x축 위치 설정 (연도별)
+        # x축 위치 설정
         x = [0, 1, 2]
         width = 0.3
         
+        # 색상 및 레이블 설정
+        colors = ['#2E86AB', '#A23B72', '#F18F01']
+        scope_labels = ['Scope 1', 'Scope 2', 'Scope 3']
+        
         # 누적 막대 차트 생성
         # 기준연도
-        ax.bar(x[0], base_year_data[0], width, label='Scope 1', color='#2E86AB', alpha=0.8)
-        ax.bar(x[0], base_year_data[1], width, bottom=base_year_data[0], label='Scope 2', color='#A23B72', alpha=0.8)
-        ax.bar(x[0], base_year_data[2], width, bottom=base_year_data[0]+base_year_data[1], label='Scope 3', color='#F18F01', alpha=0.8)
+        bottom_base = 0
+        for i, (data, color, label) in enumerate(zip(base_year_data, colors, scope_labels)):
+            if i == 0:
+                ax.bar(x[0], data, width, label=label, color=color, alpha=0.8)
+            else:
+                ax.bar(x[0], data, width, bottom=bottom_base, label=label, color=color, alpha=0.8)
+            bottom_base += data
         
         # 전년도
-        ax.bar(x[1], previous_year_data[0], width, label='_nolegend_', color='#2E86AB', alpha=0.8)
-        ax.bar(x[1], previous_year_data[1], width, bottom=previous_year_data[0], label='_nolegend_', color='#A23B72', alpha=0.8)
-        ax.bar(x[1], previous_year_data[2], width, bottom=previous_year_data[0]+previous_year_data[1], label='_nolegend_', color='#F18F01', alpha=0.8)
+        bottom_prev = 0
+        for i, (data, color) in enumerate(zip(previous_year_data, colors)):
+            ax.bar(x[1], data, width, bottom=bottom_prev, color=color, alpha=0.8)
+            bottom_prev += data
         
         # 보고대상연도
-        ax.bar(x[2], report_year_data[0], width, label='_nolegend_', color='#2E86AB', alpha=0.8)
-        ax.bar(x[2], report_year_data[1], width, bottom=report_year_data[0], label='_nolegend_', color='#A23B72', alpha=0.8)
-        ax.bar(x[2], report_year_data[2], width, bottom=report_year_data[0]+report_year_data[1], label='_nolegend_', color='#F18F01', alpha=0.8)
+        bottom_report = 0
+        for i, (data, color) in enumerate(zip(report_year_data, colors)):
+            ax.bar(x[2], data, width, bottom=bottom_report, color=color, alpha=0.8)
+            bottom_report += data
         
         # 축 레이블 및 제목 설정
-        ax.set_xlabel('연도', fontsize=12, fontweight='bold')
-        ax.set_ylabel('배출량 (tCO2eq)', fontsize=12, fontweight='bold')
-        ax.set_title('연도별 Scope 온실가스 배출량 추이', fontsize=14, fontweight='bold', pad=20)
+        ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
         
         # x축 눈금 설정
         ax.set_xticks(x)
-        ax.set_xticklabels(['기준연도', '전년도', '보고대상연도'])
+        ax.set_xticklabels(year_labels)
         
         # 범례 설정
-        ax.legend(loc='upper right', fontsize=10, bbox_to_anchor=(1.0, 1.0))
+        ax.legend(loc='upper right', fontsize=10)
         
         # 그리드 추가
         ax.grid(True, axis='y', alpha=0.3)
@@ -428,23 +491,124 @@ def create_emission_chart(chart1_csv: str, temp_dir: str):
         for i, total in enumerate(year_totals):
             if total > 0:
                 ax.text(i, total + max_total * 0.02, f'{total:,.0f}', 
-                       ha='center', va='bottom', fontsize=10, fontweight='bold', color='black')
+                       ha='center', va='bottom', fontsize=10, fontweight='bold')
         
         # 레이아웃 조정
         plt.tight_layout()
-        plt.subplots_adjust(right=0.85)
         
         # 차트 저장
         chart_path = os.path.join(temp_dir, 'Chart1.png')
-        plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+        plt.savefig(chart_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
         
-        print("누적 세로 막대형 차트가 성공적으로 생성되었습니다.")
+        print("차트가 성공적으로 생성되었습니다.")
         return chart_path
         
     except Exception as e:
         print(f"차트 생성 중 오류가 발생했습니다: {str(e)}")
+        plt.close()
         return None
+
+# def create_emission_chart(chart1_csv: str, temp_dir: str):
+#     """Chart1 CSV 데이터를 이용하여 누적 세로 막대형 차트를 생성합니다."""
+#     try:
+#         # Chart1 CSV 데이터 파싱
+#         df = csv_string_to_dataframe(chart1_csv)
+        
+#         if df.empty:
+#             print("차트 데이터가 비어있습니다.")
+#             return None
+        
+#         # 데이터 준비 - 각 Scope별로 연도별 배출량
+#         scopes = df.iloc[:, 0].tolist()  # Scope 1, Scope 2, Scope 3
+#         base_year_data = [safe_float_convert(x) for x in df.iloc[:, 1].tolist()]
+#         previous_year_data = [safe_float_convert(x) for x in df.iloc[:, 2].tolist()]
+#         report_year_data = [safe_float_convert(x) for x in df.iloc[:, 3].tolist()]
+        
+#         # 한글 폰트 설정
+#         font_list = fm.findSystemFonts(fontpaths=None, fontext='ttf')
+#         korean_fonts = []
+#         for font in font_list:
+#             try:
+#                 if any(korean_char in font for korean_char in ['AppleGothic', 'Nanum', 'Malgun', 'Dotum', 'Batang']):
+#                     korean_fonts.append(font)
+#             except:
+#                 continue
+        
+#         if korean_fonts:
+#             plt.rcParams['font.family'] = 'AppleGothic'
+#         else:
+#             plt.rcParams['font.family'] = 'DejaVu Sans'
+        
+#         # 차트 생성
+#         fig, ax = plt.subplots(figsize=(10, 7))
+        
+#         # x축 위치 설정 (연도별)
+#         x = [0, 1, 2]
+#         width = 0.3
+        
+#         # 누적 막대 차트 생성
+#         # 기준연도
+#         ax.bar(x[0], base_year_data[0], width, label='Scope 1', color='#2E86AB', alpha=0.8)
+#         ax.bar(x[0], base_year_data[1], width, bottom=base_year_data[0], label='Scope 2', color='#A23B72', alpha=0.8)
+#         ax.bar(x[0], base_year_data[2], width, bottom=base_year_data[0]+base_year_data[1], label='Scope 3', color='#F18F01', alpha=0.8)
+        
+#         # 전년도
+#         ax.bar(x[1], previous_year_data[0], width, label='_nolegend_', color='#2E86AB', alpha=0.8)
+#         ax.bar(x[1], previous_year_data[1], width, bottom=previous_year_data[0], label='_nolegend_', color='#A23B72', alpha=0.8)
+#         ax.bar(x[1], previous_year_data[2], width, bottom=previous_year_data[0]+previous_year_data[1], label='_nolegend_', color='#F18F01', alpha=0.8)
+        
+#         # 보고대상연도
+#         ax.bar(x[2], report_year_data[0], width, label='_nolegend_', color='#2E86AB', alpha=0.8)
+#         ax.bar(x[2], report_year_data[1], width, bottom=report_year_data[0], label='_nolegend_', color='#A23B72', alpha=0.8)
+#         ax.bar(x[2], report_year_data[2], width, bottom=report_year_data[0]+report_year_data[1], label='_nolegend_', color='#F18F01', alpha=0.8)
+        
+#         # 축 레이블 및 제목 설정
+#         ax.set_xlabel('연도', fontsize=12, fontweight='bold')
+#         ax.set_ylabel('배출량 (tCO2eq)', fontsize=12, fontweight='bold')
+#         ax.set_title('연도별 Scope 온실가스 배출량 추이', fontsize=14, fontweight='bold', pad=20)
+        
+#         # x축 눈금 설정
+#         ax.set_xticks(x)
+#         ax.set_xticklabels(['기준연도', '전년도', '보고대상연도'])
+        
+#         # 범례 설정
+#         ax.legend(loc='upper right', fontsize=10, bbox_to_anchor=(1.0, 1.0))
+        
+#         # 그리드 추가
+#         ax.grid(True, axis='y', alpha=0.3)
+        
+#         # y축 범위 설정
+#         max_total = max([
+#             sum(base_year_data),
+#             sum(previous_year_data),
+#             sum(report_year_data)
+#         ])
+#         if max_total > 0:
+#             ax.set_ylim(0, max_total * 1.1)
+        
+#         # 막대 위에 값 표시
+#         year_totals = [sum(base_year_data), sum(previous_year_data), sum(report_year_data)]
+#         for i, total in enumerate(year_totals):
+#             if total > 0:
+#                 ax.text(i, total + max_total * 0.02, f'{total:,.0f}', 
+#                        ha='center', va='bottom', fontsize=10, fontweight='bold', color='black')
+        
+#         # 레이아웃 조정
+#         plt.tight_layout()
+#         plt.subplots_adjust(right=0.85)
+        
+#         # 차트 저장
+#         chart_path = os.path.join(temp_dir, 'Chart1.png')
+#         plt.savefig(chart_path, dpi=300, bbox_inches='tight')
+#         plt.close()
+        
+#         print("누적 세로 막대형 차트가 성공적으로 생성되었습니다.")
+#         return chart_path
+        
+#     except Exception as e:
+#         print(f"차트 생성 중 오류가 발생했습니다: {str(e)}")
+#         return None
 
 def create_emission_report(variables: Dict[str, Any], request_data: ReportRequest, temp_dir: str):
     """온실가스 배출량 보고서를 생성합니다."""
@@ -514,7 +678,7 @@ def create_emission_report(variables: Dict[str, Any], request_data: ReportReques
     
     # Sub Section 1-4
     doc.add_heading('배출량 추이', level=2)
-    chart_path = create_emission_chart(request_data.word_chart1_csv, temp_dir)
+    chart_path = create_emission_chart_robust(request_data.word_chart1_csv, temp_dir)
     if chart_path and os.path.exists(chart_path):
         doc.add_picture(chart_path, width=Inches(6))
         last_paragraph = doc.paragraphs[-1]
