@@ -350,41 +350,45 @@ def add_table_from_dataframe(document, df: pd.DataFrame):
     document.add_paragraph()  # 테이블 후 빈 줄 추가
 
 def setup_korean_font():
-    """서버 환경에서 한글 폰트를 설정합니다."""
+    """서버 환경에서 한글 폰트를 직접 경로로 설정합니다."""
     try:
-        # 설치된 한글 폰트 찾기
-        font_candidates = [
-            'NanumGothic', 'Nanum Gothic', 'NanumGothic-Regular',
-            'Noto Sans CJK KR', 'Noto Sans CJK', 'NotoSansCJK',
-            'Malgun Gothic', 'AppleGothic', 'Dotum', 'Gulim'
-        ]
+        # 직접 폰트 파일 경로 지정
+        font_path = '/usr/share/fonts/korean/NanumGothic.ttf'
         
-        available_fonts = [f.name for f in fm.fontManager.ttflist]
-        print(f"사용 가능한 폰트 수: {len(available_fonts)}")
-        
-        korean_font = None
-        for font in font_candidates:
-            if font in available_fonts:
-                korean_font = font
-                break
-        
-        if korean_font:
-            plt.rcParams['font.family'] = korean_font
-            print(f"사용된 한글 폰트: {korean_font}")
-            return True
-        
-        # 폰트 캐시 새로고침 후 재시도
-        fm._rebuild()
-        available_fonts = [f.name for f in fm.fontManager.ttflist]
-        
-        for font in font_candidates:
-            if font in available_fonts:
-                korean_font = font
-                plt.rcParams['font.family'] = korean_font
-                print(f"캐시 새로고침 후 사용된 폰트: {korean_font}")
+        if os.path.exists(font_path):
+            print(f"폰트 파일 발견: {font_path}")
+            
+            # matplotlib에 폰트 직접 등록
+            fm.fontManager.addfont(font_path)
+            
+            # 폰트 이름으로 설정 (여러 방법 시도)
+            font_names_to_try = ['NanumGothic', '나눔고딕', 'Nanum Gothic']
+            
+            for font_name in font_names_to_try:
+                try:
+                    plt.rcParams['font.family'] = font_name
+                    print(f"폰트 설정 시도: {font_name}")
+                    
+                    # 간단한 테스트
+                    fig, ax = plt.subplots(figsize=(1, 1))
+                    ax.text(0.5, 0.5, '한글', ha='center', va='center')
+                    plt.close(fig)
+                    
+                    print(f"한글 폰트 설정 성공: {font_name}")
+                    return True
+                except:
+                    continue
+            
+            # 폰트 이름이 안 되면 직접 폰트 속성 사용
+            try:
+                font_prop = fm.FontProperties(fname=font_path)
+                plt.rcParams['font.family'] = font_prop.get_name()
+                print(f"직접 경로로 폰트 설정 성공: {font_prop.get_name()}")
                 return True
+            except Exception as e:
+                print(f"직접 경로 설정 실패: {e}")
         
-        print("한글 폰트를 찾을 수 없습니다.")
+        print("한글 폰트 파일을 찾을 수 없습니다.")
         return False
         
     except Exception as e:
